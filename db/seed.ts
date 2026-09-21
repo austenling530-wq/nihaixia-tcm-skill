@@ -1,6 +1,6 @@
 // 初始化第一个口令。口令从环境变量 INVITE_CODE 取，没设就随机生成并打印出来。
 import { upsertInvite } from "../api/queries/invites";
-import { randomCode } from "../scripts/invite";
+import { randomCode } from "../api/lib/code";
 
 async function seed() {
   const code = process.env.INVITE_CODE?.trim() || randomCode();

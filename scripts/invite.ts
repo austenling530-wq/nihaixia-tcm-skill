@@ -7,7 +7,7 @@
 //   usage                        今天各口令用量
 //   logs [N]                     最近 N 条提问（默认 20）
 
-import crypto from "node:crypto";
+import { randomCode } from "../api/lib/code";
 import {
   listInvites,
   normalizeCode,
@@ -16,15 +16,6 @@ import {
   upsertInvite,
   usageToday,
 } from "../api/queries/invites";
-
-const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // 去掉易混的 I O 0 1
-
-export function randomCode(len = 8): string {
-  const bytes = crypto.randomBytes(len);
-  let s = "";
-  for (let i = 0; i < len; i++) s += ALPHABET[bytes[i] % ALPHABET.length];
-  return s;
-}
 
 async function main(argv: string[]) {
   const [cmd, ...rest] = argv;

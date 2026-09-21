@@ -34,10 +34,10 @@ export const askInFlight = new InFlight();
 export function checkVerifyAllowed(ip: string) {
   const locked = verifyLock.lockedFor(ip);
   if (locked > 0) {
-    throw new AskError("TOO_MANY_REQUESTS", `口令错误次数过多，请 ${formatWait(locked)} 后再试`);
+    throw new AskError("TOO_MANY_REQUESTS", `口令错误次数过多，请 ${formatWait(locked)}后再试`);
   }
   const w = verifyWindow.hit(ip);
-  if (!w.ok) throw new AskError("TOO_MANY_REQUESTS", `操作太频繁，请 ${formatWait(w.retryAfterMs)} 后再试`);
+  if (!w.ok) throw new AskError("TOO_MANY_REQUESTS", `操作太频繁，请 ${formatWait(w.retryAfterMs)}后再试`);
 }
 
 const HISTORY_TURNS = 6; // 带给模型的历史条数（user+assistant 合计）
@@ -69,9 +69,9 @@ export async function answerQuestion(params: {
   if (!invite || !invite.active) throw new AskError("FORBIDDEN", "该口令已被停用");
 
   const ipW = askPerIp.hit(params.ip);
-  if (!ipW.ok) throw new AskError("TOO_MANY_REQUESTS", `提问太频繁，请 ${formatWait(ipW.retryAfterMs)} 后再试`);
+  if (!ipW.ok) throw new AskError("TOO_MANY_REQUESTS", `提问太频繁，请 ${formatWait(ipW.retryAfterMs)}后再试`);
   const codeW = askPerCode.hit(String(codeId));
-  if (!codeW.ok) throw new AskError("TOO_MANY_REQUESTS", `这个口令提问太频繁，请 ${formatWait(codeW.retryAfterMs)} 后再试`);
+  if (!codeW.ok) throw new AskError("TOO_MANY_REQUESTS", `这个口令提问太频繁，请 ${formatWait(codeW.retryAfterMs)}后再试`);
 
   const used = await countTodayUsage(codeId);
   if (used >= invite.dailyLimit) {
