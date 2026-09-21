@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1790015301690,
+      "tag": "0000_silly_slipstream",
+      "breakpoints": true
+    }
+  ]
+}

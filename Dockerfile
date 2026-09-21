@@ -1,6 +1,7 @@
 FROM node:20-slim
 
 WORKDIR /app
+ENV TZ=Asia/Shanghai
 
 COPY package.json package-lock.json ./
 RUN npm ci

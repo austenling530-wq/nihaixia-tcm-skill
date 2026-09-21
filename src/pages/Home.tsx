@@ -46,25 +46,28 @@ const books = [
   },
 ];
 
+const UPSTREAM = "https://github.com/jangviktor-web/nihaixia";
+
 const badges = [
-  { icon: Star, text: "GitHub 3K Stars" },
-  { icon: Layers, text: "支持 5 个运行时" },
+  { icon: Star, text: "开源项目 v2.3.1" },
+  { icon: Layers, text: "支持多个 Agent 运行时" },
   { icon: ShieldCheck, text: "MulanPSL-2.0 开源协议" },
   { icon: Terminal, text: "Agent Skills 标准" },
 ];
 
-const runtimes = ["Claude Code", "OpenClaw", "SkillHub", "Kimi CLI", "Cursor"];
+const runtimes = ["Claude Code", "OpenClaw", "SkillHub", "Kimi CLI", "Cursor", "腾讯 ima"];
 
 export default function Home() {
   return (
     <div className="min-h-screen bg-[#f6f1e6] text-[#2b2320] antialiased">
+      <div className="mx-auto max-w-md">
       {/* Hero */}
       <header className="px-6 pt-14 pb-10 text-center">
         <div className="mx-auto mb-5 inline-flex items-center gap-1.5 rounded-full border border-[#2b2320]/15 bg-white/60 px-3 py-1 text-xs text-[#2b2320]/70">
           <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
           Claude Code · OpenClaw · SkillHub
         </div>
-        <h1 className="text-4xl font-black leading-tight tracking-tight">
+        <h1 className="mx-auto max-w-md text-4xl font-black leading-tight tracking-tight">
           两千年中医智慧
           <br />
           <span className="text-[#b03a2e]">一个命令激活</span>
@@ -78,10 +81,10 @@ export default function Home() {
             to="/ask"
             className="rounded-xl bg-[#b03a2e] px-6 py-3 text-sm font-bold text-white shadow-lg shadow-[#b03a2e]/25 active:scale-95 transition"
           >
-            立即体验问诊
+            立即体验问答
           </Link>
           <a
-            href="https://github.com"
+            href={UPSTREAM}
             target="_blank"
             rel="noreferrer"
             className="inline-flex items-center gap-1.5 rounded-xl border border-[#2b2320]/20 bg-white/70 px-5 py-3 text-sm font-semibold active:scale-95 transition"
@@ -161,6 +164,9 @@ export default function Home() {
           >
             <MessageCircle className="h-4 w-4" /> 输入口令，亲自问一句
           </Link>
+          <p className="mt-2 text-[11px] text-[#2b2320]/50">
+            在线问答由 AI 实时检索上面这套知识库生成，每条回答可查看引用了哪些段落
+          </p>
         </div>
       </section>
 
@@ -192,19 +198,21 @@ export default function Home() {
       {/* Install */}
       <section className="mx-5 mt-12 rounded-2xl bg-[#2b2320] p-6 text-[#f6f1e6]">
         <h2 className="text-xl font-black">一个命令，装进你的 Agent</h2>
-        <div className="mt-4 rounded-xl bg-black/40 p-4 font-mono text-xs leading-6 text-emerald-300">
-          npx skillhub install nihaixia-tcm
+        <div className="mt-4 overflow-x-auto rounded-xl bg-black/40 p-4 font-mono text-xs leading-6 text-emerald-300">
+          <div className="whitespace-nowrap">openclaw skills install @jangviktor-web/nihaixia</div>
+          <div className="mt-1 whitespace-nowrap text-emerald-300/70">git clone {UPSTREAM}.git</div>
         </div>
         <p className="mt-3 text-xs leading-5 text-[#f6f1e6]/60">
-          支持 Claude Code、OpenClaw、SkillHub 等 5 个运行时，安装即用。
+          Claude Code、OpenClaw、SkillHub、腾讯 ima 等运行时均可安装，详见项目 README。
         </p>
       </section>
 
       {/* Footer */}
       <footer className="px-6 py-10 text-center text-[11px] leading-5 text-[#2b2320]/50">
-        <p>本站为开源项目介绍与学习交流页，内容不构成任何医疗建议。</p>
-        <p className="mt-1">问诊功能仅供经方学习演示 · 木兰协议 MulanPSL-2.0</p>
+        <p>本站为开源项目 nihaixia skill 的非官方介绍与学习交流页，与倪海厦先生及其家属、汉唐中医无隶属关系。</p>
+        <p className="mt-1">内容不构成任何医疗建议 · 问答功能仅供经方学习演示 · 知识库遵循 MulanPSL-2.0</p>
       </footer>
+      </div>
     </div>
   );
 }

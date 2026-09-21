@@ -1,18 +1,15 @@
-import { getDb } from "../api/queries/connection";
-import { inviteCodes } from "./schema";
+// 初始化第一个口令。口令从环境变量 INVITE_CODE 取，没设就随机生成并打印出来。
+import { upsertInvite } from "../api/queries/invites";
+import { randomCode } from "../scripts/invite";
 
 async function seed() {
-  const db = getDb();
-  console.log("Seeding database...");
-
-  // 默认邀请码：NIHAIXIA，每天限 20 次问诊
-  await db
-    .insert(inviteCodes)
-    .values({ code: "NIHAIXIA", label: "默认分享口令", dailyLimit: 20 })
-    .onDuplicateKeyUpdate({ set: { label: "默认分享口令" } });
-
-  console.log("Done. Default invite code: NIHAIXIA");
-  process.exit(0); // close MySQL connection pool
+  const code = process.env.INVITE_CODE?.trim() || randomCode();
+  const row = await upsertInvite(code, process.env.INVITE_LABEL ?? "默认分享口令", Number(process.env.INVITE_LIMIT ?? 20));
+  console.log(`默认口令：${row?.code}（${row?.dailyLimit} 次/天）`);
+  process.exit(0);
 }
 
-seed();
+seed().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

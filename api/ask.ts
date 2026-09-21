@@ -1,24 +1,44 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, publicQuery } from "./middleware";
-import { issueToken, verifyToken } from "./token";
-import { askAI } from "./ai";
-import {
-  countTodayUsage,
-  findInviteByCode,
-  findInviteById,
-  insertChatLog,
-} from "./queries/invites";
+import { issueToken } from "./token";
+import { countTodayUsage, findInviteByCode } from "./queries/invites";
+import { AskError, answerQuestion, checkVerifyAllowed, verifyLock } from "./service";
+import { aiConfigured, aiModel } from "./ai";
+
+export const askInput = z.object({
+  token: z.string().min(10).max(512),
+  question: z.string().trim().min(2, "至少写两个字吧").max(500, "问题请控制在 500 字以内"),
+  history: z
+    .array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(8000) }))
+    .max(20)
+    .optional(),
+});
+
+function toTrpc(e: unknown): never {
+  if (e instanceof AskError) throw new TRPCError({ code: e.code, message: e.message });
+  throw e;
+}
 
 export const askRouter = createRouter({
-  // 第一步：校验邀请码口令，签发访问令牌
+  // 第一步：校验邀请码口令，签发访问令牌（7 天）
   verify: publicQuery
     .input(z.object({ code: z.string().trim().min(1).max(64) }))
-    .mutation(async ({ input }) => {
-      const invite = await findInviteByCode(input.code.toUpperCase());
-      if (!invite || !invite.active) {
-        throw new TRPCError({ code: "UNAUTHORIZED", message: "口令无效或已停用" });
+    .mutation(async ({ input, ctx }) => {
+      try {
+        checkVerifyAllowed(ctx.ip);
+      } catch (e) {
+        toTrpc(e);
       }
+      const invite = await findInviteByCode(input.code);
+      if (!invite || !invite.active) {
+        const lockMs = verifyLock.fail(ctx.ip);
+        throw new TRPCError({
+          code: "UNAUTHORIZED",
+          message: lockMs ? "口令错误次数过多，请 15 分钟后再试" : "口令无效或已停用",
+        });
+      }
+      verifyLock.reset(ctx.ip);
       const used = await countTodayUsage(invite.id);
       return {
         token: issueToken(invite.id),
@@ -28,46 +48,14 @@ export const askRouter = createRouter({
       };
     }),
 
-  // 第二步：持令牌提问；服务端限流后代理到模型 API
-  ask: publicQuery
-    .input(
-      z.object({
-        token: z.string().min(10),
-        question: z.string().trim().min(2, "至少写两个字吧").max(500),
-      }),
-    )
-    .mutation(async ({ input }) => {
-      const codeId = verifyToken(input.token);
-      if (!codeId) {
-        throw new TRPCError({
-          code: "UNAUTHORIZED",
-          message: "访问令牌已失效，请重新输入口令",
-        });
-      }
-      const invite = await findInviteById(codeId);
-      if (!invite || !invite.active) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "该口令已被停用" });
-      }
+  // 第二步：持令牌提问（非流式；网页默认走 /api/ask/stream）
+  ask: publicQuery.input(askInput).mutation(async ({ input, ctx }) => {
+    try {
+      return await answerQuestion({ ...input, ip: ctx.ip });
+    } catch (e) {
+      toTrpc(e);
+    }
+  }),
 
-      const used = await countTodayUsage(codeId);
-      if (used >= invite.dailyLimit) {
-        throw new TRPCError({
-          code: "TOO_MANY_REQUESTS",
-          message: `这个口令今天已用满 ${invite.dailyLimit} 次，明天再来吧`,
-        });
-      }
-
-      let answer: string;
-      try {
-        answer = await askAI(input.question);
-      } catch (e) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: `AI 服务暂时不可用：${(e as Error).message}`,
-        });
-      }
-
-      await insertChatLog(codeId, input.question, answer);
-      return { answer, usedToday: used + 1, dailyLimit: invite.dailyLimit };
-    }),
+  status: publicQuery.query(() => ({ aiConfigured: aiConfigured(), model: aiConfigured() ? aiModel() : null })),
 });
