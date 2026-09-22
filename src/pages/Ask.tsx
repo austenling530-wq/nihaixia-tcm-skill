@@ -228,7 +228,7 @@ export default function Ask() {
           <Bubble key={i} msg={m} token={token} tts={ttsOn} />
         ))}
         {pending && (
-          <div className="rounded-2xl rounded-tl-sm border border-[#2b2320]/10 bg-white px-4 py-3 text-sm leading-6 shadow-sm">
+          <div className="rounded-2xl border border-[#2b2320]/10 bg-white px-4 py-3 text-sm leading-6 shadow-sm">
             {streaming ? (
               <Markdown text={streaming} />
             ) : (
@@ -278,20 +278,21 @@ function Bubble({ msg, token, tts }: { msg: Msg; token: string; tts: boolean }) 
   const [showSources, setShowSources] = useState(false);
   if (msg.role === "user") {
     return (
-      <div className="ml-10 whitespace-pre-wrap rounded-2xl rounded-tr-sm bg-[#2b2320] px-4 py-3 text-sm leading-6 text-[#f6f1e6]">
+      <div className="whitespace-pre-wrap rounded-2xl bg-[#2b2320] px-4 py-3 text-sm leading-6 text-[#f6f1e6]">
+        <div className="mb-1 text-[11px] font-semibold tracking-wide text-[#f6f1e6]/50">问</div>
         {msg.text}
       </div>
     );
   }
   if (msg.error) {
     return (
-      <div className="rounded-2xl rounded-tl-sm border border-[#b03a2e]/30 bg-[#b03a2e]/5 px-4 py-3 text-sm leading-6 text-[#b03a2e]">
+      <div className="rounded-2xl border border-[#b03a2e]/30 bg-[#b03a2e]/5 px-4 py-3 text-sm leading-6 text-[#b03a2e]">
         {msg.text}
       </div>
     );
   }
   return (
-    <div className="rounded-2xl rounded-tl-sm border border-[#2b2320]/10 bg-white px-4 py-3 text-sm leading-6 shadow-sm">
+    <div className="rounded-2xl border border-[#2b2320]/10 bg-white px-4 py-3 text-sm leading-6 shadow-sm">
       <Markdown text={msg.text} />
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-[#2b2320]/10 pt-2 text-[10px] text-[#2b2320]/45">
         {tts && <SpeakButton text={msg.text} token={token} />}
