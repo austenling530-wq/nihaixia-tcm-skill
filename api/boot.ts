@@ -13,7 +13,8 @@ import { z } from "zod";
 import { verifyToken } from "./token";
 import { findInviteById } from "./queries/invites";
 import { SlidingWindow } from "./lib/ratelimit";
-import { TtsConfigError, TtsUpstreamError, synthesize, ttsEnabled } from "./tts";
+import { TtsConfigError, TtsUpstreamError, cachedFilePath, synthesize, ttsEnabled } from "./tts";
+import fs from "node:fs";
 
 const app = new Hono<{ Bindings: HttpBindings }>();
 
@@ -97,15 +98,8 @@ app.post("/api/tts", async (c) => {
   try {
     const r = await synthesize(parsed.data.text, AbortSignal.timeout(90_000));
     console.log(`[tts] code=${codeId} chars=${r.chars} bytes=${r.audio.length} cached=${r.cached} ${Date.now() - t0}ms`);
-    return new Response(new Uint8Array(r.audio), {
-      status: 200,
-      headers: {
-        "Content-Type": "audio/mpeg",
-        "Content-Length": String(r.audio.length),
-        "Cache-Control": "private, max-age=86400",
-        "X-TTS-Cached": r.cached ? "1" : "0",
-      },
-    });
+    // 合成好后给一个可直接放进 <audio src> 的地址；Safari 对真实 URL（支持 Range）最稳
+    return c.json({ url: `/api/tts/${r.key}.mp3`, bytes: r.audio.length, cached: r.cached });
   } catch (e) {
     if (e instanceof TtsConfigError) return c.json({ error: "站点尚未配置语音服务" }, 503);
     if (e instanceof TtsUpstreamError) {
@@ -116,6 +110,50 @@ app.post("/api/tts", async (c) => {
     return c.json({ error: "语音合成出错" }, 500);
   }
 });
+
+// 播放已合成的音频（key 为不可猜测的 sha1；支持 Range，iOS Safari 拖动进度条要用）
+app.get("/api/tts/:file", async (c) => {
+  const key = c.req.param("file").replace(/\.mp3$/, "");
+  const file = cachedFilePath(key);
+  if (!file) return c.json({ error: "Not Found" }, 404);
+  let st: fs.Stats;
+  try {
+    st = await fs.promises.stat(file);
+  } catch {
+    return c.json({ error: "音频已过期，请重新点击播放" }, 404);
+  }
+  const size = st.size;
+  const base = {
+    "Content-Type": "audio/mpeg",
+    "Accept-Ranges": "bytes",
+    "Cache-Control": "private, max-age=604800",
+  };
+  const range = c.req.header("range");
+  const m = range && /^bytes=(\d*)-(\d*)$/.exec(range);
+  if (m) {
+    const start = m[1] ? Number(m[1]) : Math.max(0, size - Number(m[2]));
+    const end = m[1] && m[2] ? Math.min(Number(m[2]), size - 1) : size - 1;
+    if (start >= size || start > end) return new Response(null, { status: 416, headers: { "Content-Range": `bytes */${size}` } });
+    const buf = await readSlice(file, start, end);
+    return new Response(new Uint8Array(buf), {
+      status: 206,
+      headers: { ...base, "Content-Range": `bytes ${start}-${end}/${size}`, "Content-Length": String(end - start + 1) },
+    });
+  }
+  const buf = await fs.promises.readFile(file);
+  return new Response(new Uint8Array(buf), { status: 200, headers: { ...base, "Content-Length": String(size) } });
+});
+
+async function readSlice(file: string, start: number, end: number): Promise<Buffer> {
+  const fh = await fs.promises.open(file, "r");
+  try {
+    const buf = Buffer.alloc(end - start + 1);
+    await fh.read(buf, 0, buf.length, start);
+    return buf;
+  } finally {
+    await fh.close();
+  }
+}
 
 app.get("/api/health", (c) => c.json({ ok: true, chunks: getIndex().chunks.length }));
 app.all("/api/*", (c) => c.json({ error: "Not Found" }, 404));

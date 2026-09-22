@@ -255,7 +255,7 @@ export default function Ask() {
             rows={1}
             maxLength={500}
             placeholder="描述症状，问倪师一句…"
-            className="max-h-28 flex-1 resize-none rounded-xl border border-[#2b2320]/15 bg-white px-3 py-2.5 text-sm outline-none focus:border-[#b03a2e]"
+            className="max-h-28 flex-1 resize-none rounded-xl border border-[#2b2320]/15 bg-white px-3 py-2.5 text-base outline-none focus:border-[#b03a2e]"
           />
           <button
             onClick={() => void send()}
@@ -315,7 +315,7 @@ function Bubble({ msg, token, tts }: { msg: Msg; token: string; tts: boolean }) 
 
 // 一小段无声 wav：在用户点击的同一事件里先 play 一下，iOS Safari 才允许之后异步换 src 再播放
 const SILENT_WAV =
-  "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
+  "data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==";
 
 function SpeakButton({ text, token }: { text: string; token: string }) {
   const [state, setState] = useState<"idle" | "loading" | "playing" | "error">("idle");
@@ -323,13 +323,7 @@ function SpeakButton({ text, token }: { text: string; token: string }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const urlRef = useRef<string | null>(null);
 
-  useEffect(
-    () => () => {
-      audioRef.current?.pause();
-      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
-    },
-    [],
-  );
+  useEffect(() => () => audioRef.current?.pause(), []);
 
   const stop = () => {
     audioRef.current?.pause();
@@ -343,10 +337,6 @@ function SpeakButton({ text, token }: { text: string; token: string }) {
       a = new Audio();
       a.preload = "auto";
       a.onended = () => setState("idle");
-      a.onerror = () => {
-        setErr("播放失败");
-        setState("error");
-      };
       audioRef.current = a;
     }
     // 已经取过音频：直接重放
@@ -356,6 +346,8 @@ function SpeakButton({ text, token }: { text: string; token: string }) {
       setState("playing");
       return;
     }
+    // 在用户点击的同一事件里先播一段无声，iOS Safari 才允许之后换 src 再播
+    a.onerror = null;
     a.src = SILENT_WAV;
     void a.play().catch(() => {});
     setState("loading");
@@ -366,14 +358,14 @@ function SpeakButton({ text, token }: { text: string; token: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token, text }),
       });
-      if (!resp.ok) {
-        const j = (await resp.json().catch(() => ({}))) as { error?: string };
-        throw new Error(j.error ?? `请求失败（${resp.status}）`);
-      }
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      urlRef.current = url;
-      a.src = url;
+      const j = (await resp.json().catch(() => ({}))) as { url?: string; error?: string };
+      if (!resp.ok || !j.url) throw new Error(j.error ?? `请求失败（${resp.status}）`);
+      urlRef.current = j.url;
+      a.onerror = () => {
+        setErr("播放失败，再点一次");
+        setState("error");
+      };
+      a.src = j.url;
       await a.play();
       setState("playing");
     } catch (e) {

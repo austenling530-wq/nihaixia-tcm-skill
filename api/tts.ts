@@ -147,7 +147,25 @@ export function* splitJsonObjects(buf: string): Generator<string> {
   }
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** 上游并发额度超限（45000292）时退避重试几次 */
 async function synthesizeChunk(text: string, signal?: AbortSignal): Promise<Buffer> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      return await synthesizeChunkOnce(text, signal);
+    } catch (e) {
+      lastErr = e;
+      const msg = e instanceof TtsUpstreamError ? e.message : "";
+      if (!/45000292|concurrency/i.test(msg)) throw e;
+      await sleep(600 * (attempt + 1));
+    }
+  }
+  throw lastErr;
+}
+
+async function synthesizeChunkOnce(text: string, signal?: AbortSignal): Promise<Buffer> {
   const c = cfg();
   const resp = await fetch(ENDPOINT, {
     method: "POST",
@@ -194,8 +212,20 @@ function cacheKey(text: string, voice: string, speed: number): string {
   return crypto.createHash("sha1").update(`${voice}|${speed}|${text}`).digest("hex");
 }
 
-/** 整段回答 → mp3（带磁盘缓存） */
-export async function synthesize(markdown: string, signal?: AbortSignal): Promise<{ audio: Buffer; cached: boolean; chars: number }> {
+/** 缓存文件路径（key 为 40 位 sha1，用于 GET /api/tts/:key.mp3） */
+export function cachedFilePath(key: string): string | null {
+  if (!/^[0-9a-f]{40}$/.test(key)) return null;
+  return path.join(cfg().cacheDir, `${key}.mp3`);
+}
+
+// 同一段文本正在合成时，后来的请求等它，不重复花钱
+const inFlight = new Map<string, Promise<Buffer>>();
+
+/** 整段回答 → mp3（带磁盘缓存 + 进行中去重） */
+export async function synthesize(
+  markdown: string,
+  signal?: AbortSignal,
+): Promise<{ audio: Buffer; key: string; cached: boolean; chars: number }> {
   const c = cfg();
   const text = speakableText(markdown);
   if (!text) throw new TtsUpstreamError("没有可朗读的内容");
@@ -203,24 +233,34 @@ export async function synthesize(markdown: string, signal?: AbortSignal): Promis
   const file = path.join(c.cacheDir, `${key}.mp3`);
   try {
     const buf = await fs.promises.readFile(file);
-    return { audio: buf, cached: true, chars: text.length };
+    return { audio: buf, key, cached: true, chars: text.length };
   } catch {
     /* miss */
   }
-  const chunks = splitForTts(text);
-  const parts: Buffer[] = [];
-  // 四段并发（TTS_CONCURRENCY 可调），兼顾速度和上游并发限制
-  const par = Math.max(1, Number(process.env.TTS_CONCURRENCY || "4") || 4);
-  for (let i = 0; i < chunks.length; i += par) {
-    const batch = chunks.slice(i, i + par).map((t) => synthesizeChunk(t, signal));
-    parts.push(...(await Promise.all(batch)));
+  let job = inFlight.get(key);
+  const joined = Boolean(job);
+  if (!job) {
+    job = (async () => {
+      const chunks = splitForTts(text);
+      const parts: Buffer[] = [];
+      // 试用账号上游并发额度是 2；TTS_CONCURRENCY 可调
+      const par = Math.max(1, Number(process.env.TTS_CONCURRENCY || "2") || 2);
+      for (let i = 0; i < chunks.length; i += par) {
+        const batch = chunks.slice(i, i + par).map((t) => synthesizeChunk(t, signal));
+        parts.push(...(await Promise.all(batch)));
+      }
+      const audio = Buffer.concat(parts);
+      try {
+        await fs.promises.mkdir(c.cacheDir, { recursive: true });
+        await fs.promises.writeFile(file, audio);
+      } catch (e) {
+        console.warn("[tts] cache write failed", e);
+      }
+      return audio;
+    })();
+    inFlight.set(key, job);
+    job.finally(() => inFlight.delete(key)).catch(() => {});
   }
-  const audio = Buffer.concat(parts);
-  try {
-    await fs.promises.mkdir(c.cacheDir, { recursive: true });
-    await fs.promises.writeFile(file, audio);
-  } catch (e) {
-    console.warn("[tts] cache write failed", e);
-  }
-  return { audio, cached: false, chars: text.length };
+  const audio = await job;
+  return { audio, key, cached: joined, chars: text.length };
 }
