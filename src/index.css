@@ -109,3 +109,10 @@
 .md th { background: #f6f1e6; font-weight: 700; }
 .md code { background: #f6f1e6; padding: 0 0.3em; border-radius: 0.25rem; font-size: 0.9em; }
 .md hr { border: 0; border-top: 1px solid rgba(43, 35, 32, 0.12); margin: 0.8em 0; }
+
+/* 手机端锁死横向：任何意外超宽元素都不能把整页拖出屏幕 */
+html,
+body {
+  overflow-x: clip;
+  max-width: 100%;
+}

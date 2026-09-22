@@ -139,10 +139,10 @@ export default function Home() {
       <section className="px-5 pt-12">
         <h2 className="text-center text-2xl font-black">像倪师一样回答</h2>
         <div className="mt-6 space-y-3">
-          <div className="ml-10 rounded-2xl rounded-tr-sm bg-[#2b2320] px-4 py-3 text-sm text-[#f6f1e6]">
+          <div className="ml-12 rounded-2xl rounded-tr-sm bg-[#2b2320] px-4 py-3 text-sm text-[#f6f1e6]">
             我吹冷风后发烧 38.5°C，怕冷不出汗，浑身酸痛，喉咙不痛，这是什么证？用什么方？
           </div>
-          <div className="mr-6 rounded-2xl rounded-tl-sm border border-[#2b2320]/10 bg-white px-4 py-3 text-sm leading-6 shadow-sm">
+          <div className="mr-12 rounded-2xl rounded-tl-sm border border-[#2b2320]/10 bg-white px-4 py-3 text-sm leading-6 shadow-sm">
             <p>
               你这证，清清楚楚是<strong className="text-[#b03a2e]">太阳伤寒表实证</strong>，方子就是
               <strong className="text-[#b03a2e]">麻黄汤</strong>，跑不掉的。
