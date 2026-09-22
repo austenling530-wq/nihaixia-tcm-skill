@@ -52,6 +52,13 @@ describe("splitForTts", () => {
     }
     expect(chunks.join("")).toBe(s);
   });
+  it("keeps the first chunk short so playback starts early", () => {
+    const s = "一二三四五六七八九十。".repeat(60); // 660 chars
+    const chunks = splitForTts(s, 280, 90);
+    expect(chunks[0].length).toBeLessThanOrEqual(90);
+    expect(chunks[1].length).toBeGreaterThan(90);
+    expect(chunks.join("")).toBe(s);
+  });
   it("hard-splits a single overlong sentence", () => {
     const s = "字".repeat(700);
     const chunks = splitForTts(s, 280);

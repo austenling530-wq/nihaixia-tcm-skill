@@ -13,7 +13,7 @@ import { z } from "zod";
 import { verifyToken } from "./token";
 import { findInviteById } from "./queries/invites";
 import { SlidingWindow } from "./lib/ratelimit";
-import { TtsConfigError, TtsUpstreamError, cachedFilePath, synthesize, ttsEnabled } from "./tts";
+import { TtsConfigError, TtsUpstreamError, prepareSpeech, ttsEnabled, waitChunkFile } from "./tts";
 import fs from "node:fs";
 
 const app = new Hono<{ Bindings: HttpBindings }>();
@@ -94,28 +94,24 @@ app.post("/api/tts", async (c) => {
   if (!ttsPerIp.hit(ip).ok || !ttsPerCode.hit(String(codeId)).ok) {
     return c.json({ error: "播报太频繁，请稍后再试" }, 429);
   }
-  const t0 = Date.now();
   try {
-    const r = await synthesize(parsed.data.text, AbortSignal.timeout(90_000));
-    console.log(`[tts] code=${codeId} chars=${r.chars} bytes=${r.audio.length} cached=${r.cached} ${Date.now() - t0}ms`);
-    // 合成好后给一个可直接放进 <audio src> 的地址；Safari 对真实 URL（支持 Range）最稳
-    return c.json({ url: `/api/tts/${r.key}.mp3`, bytes: r.audio.length, cached: r.cached });
+    const r = prepareSpeech(parsed.data.text);
+    console.log(`[tts] code=${codeId} chars=${r.chars} parts=${r.keys.length}`);
+    // 立刻返回各段地址；每段 GET 会等到该段合成完再给
+    return c.json({ parts: r.keys.map((k) => `/api/tts/${k}.mp3`), chars: r.chars });
   } catch (e) {
     if (e instanceof TtsConfigError) return c.json({ error: "站点尚未配置语音服务" }, 503);
-    if (e instanceof TtsUpstreamError) {
-      console.warn("[tts] upstream", e.message);
-      return c.json({ error: `语音服务暂时不可用：${e.message}` }, 502);
-    }
+    if (e instanceof TtsUpstreamError) return c.json({ error: e.message }, 502);
     console.error("[tts]", e);
     return c.json({ error: "语音合成出错" }, 500);
   }
 });
 
-// 播放已合成的音频（key 为不可猜测的 sha1；支持 Range，iOS Safari 拖动进度条要用）
+// 播放某一段音频（key 为不可猜测的 sha1；段还在合成时会等它；支持 Range，iOS Safari 需要）
 app.get("/api/tts/:file", async (c) => {
   const key = c.req.param("file").replace(/\.mp3$/, "");
-  const file = cachedFilePath(key);
-  if (!file) return c.json({ error: "Not Found" }, 404);
+  const file = await waitChunkFile(key);
+  if (!file) return c.json({ error: "音频不存在或已过期，请重新点击播放" }, 404);
   let st: fs.Stats;
   try {
     st = await fs.promises.stat(file);

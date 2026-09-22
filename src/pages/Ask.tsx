@@ -320,14 +320,54 @@ const SILENT_WAV =
 function SpeakButton({ text, token }: { text: string; token: string }) {
   const [state, setState] = useState<"idle" | "loading" | "playing" | "error">("idle");
   const [err, setErr] = useState("");
+  const [pos, setPos] = useState<[number, number] | null>(null); // 第几段/共几段
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const urlRef = useRef<string | null>(null);
+  const partsRef = useRef<string[]>([]);
+  const idxRef = useRef(0);
+  const runRef = useRef(0); // 停止/重播时让旧的播放链失效
 
   useEffect(() => () => audioRef.current?.pause(), []);
 
   const stop = () => {
+    runRef.current++;
     audioRef.current?.pause();
     setState("idle");
+    setPos(null);
+  };
+
+  // 预热下一段：让服务器把它合成好并进浏览器缓存，切换时几乎无缝
+  const prefetch = (i: number) => {
+    const url = partsRef.current[i];
+    if (url) void fetch(url).catch(() => {});
+  };
+
+  const playFrom = async (i: number, run: number) => {
+    const a = audioRef.current!;
+    const parts = partsRef.current;
+    if (run !== runRef.current) return;
+    if (i >= parts.length) {
+      setState("idle");
+      setPos(null);
+      return;
+    }
+    idxRef.current = i;
+    setPos([i + 1, parts.length]);
+    // 先确认这一段已合成（GET 会等到它就绪），同时让它进缓存
+    const r = await fetch(parts[i]);
+    if (run !== runRef.current) return;
+    if (!r.ok) throw new Error(i === 0 ? "语音合成失败，请重试" : "后面一段合成失败");
+    a.onended = () => void playFrom(i + 1, run).catch(fail);
+    a.src = parts[i];
+    await a.play();
+    if (run !== runRef.current) return;
+    setState("playing");
+    prefetch(i + 1);
+  };
+
+  const fail = (e: unknown) => {
+    setErr((e as Error).message || "播放失败");
+    setState("error");
+    setPos(null);
   };
 
   const play = async () => {
@@ -336,16 +376,9 @@ function SpeakButton({ text, token }: { text: string; token: string }) {
     if (!a) {
       a = new Audio();
       a.preload = "auto";
-      a.onended = () => setState("idle");
       audioRef.current = a;
     }
-    // 已经取过音频：直接重放
-    if (urlRef.current) {
-      a.currentTime = 0;
-      void a.play();
-      setState("playing");
-      return;
-    }
+    const run = ++runRef.current;
     // 在用户点击的同一事件里先播一段无声，iOS Safari 才允许之后换 src 再播
     a.onerror = null;
     a.src = SILENT_WAV;
@@ -353,26 +386,41 @@ function SpeakButton({ text, token }: { text: string; token: string }) {
     setState("loading");
     setErr("");
     try {
-      const resp = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, text }),
-      });
-      const j = (await resp.json().catch(() => ({}))) as { url?: string; error?: string };
-      if (!resp.ok || !j.url) throw new Error(j.error ?? `请求失败（${resp.status}）`);
-      urlRef.current = j.url;
-      a.onerror = () => {
-        setErr("播放失败，再点一次");
-        setState("error");
-      };
-      a.src = j.url;
-      await a.play();
-      setState("playing");
+      if (!partsRef.current.length) {
+        const resp = await fetch("/api/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token, text }),
+        });
+        const j = (await resp.json().catch(() => ({}))) as { parts?: string[]; error?: string };
+        if (!resp.ok || !j.parts?.length) throw new Error(j.error ?? `请求失败（${resp.status}）`);
+        partsRef.current = j.parts;
+      }
+      a.onerror = () => fail(new Error("播放失败，再点一次"));
+      await playFrom(0, run);
     } catch (e) {
-      setErr((e as Error).message);
-      setState("error");
+      fail(e);
     }
   };
+
+  const label =
+    state === "loading" ? (
+      <>
+        <Loader2 className="h-3.5 w-3.5 animate-spin" /> 合成中…
+      </>
+    ) : state === "playing" ? (
+      <>
+        <Square className="h-3 w-3" /> 停止{pos && pos[1] > 1 ? ` ${pos[0]}/${pos[1]}` : ""}
+      </>
+    ) : state === "error" ? (
+      <>
+        <Volume2 className="h-3.5 w-3.5" /> {err || "重试"}
+      </>
+    ) : (
+      <>
+        <Volume2 className="h-3.5 w-3.5" /> 听语音
+      </>
+    );
 
   return (
     <button
@@ -383,25 +431,8 @@ function SpeakButton({ text, token }: { text: string; token: string }) {
           ? "border-[#b03a2e] bg-[#b03a2e] text-white"
           : "border-[#b03a2e]/40 bg-[#b03a2e]/5 text-[#b03a2e]"
       } disabled:opacity-60`}
-      title={state === "error" ? err : undefined}
     >
-      {state === "loading" ? (
-        <>
-          <Loader2 className="h-3.5 w-3.5 animate-spin" /> 合成中…
-        </>
-      ) : state === "playing" ? (
-        <>
-          <Square className="h-3 w-3" /> 停止
-        </>
-      ) : state === "error" ? (
-        <>
-          <Volume2 className="h-3.5 w-3.5" /> {err || "重试"}
-        </>
-      ) : (
-        <>
-          <Volume2 className="h-3.5 w-3.5" /> 听语音
-        </>
-      )}
+      {label}
     </button>
   );
 }

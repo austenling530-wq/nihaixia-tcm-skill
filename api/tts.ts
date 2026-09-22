@@ -95,12 +95,16 @@ function stripInline(s: string): string {
     .trim();
 }
 
-/** 按句号/问号/换行切段，每段不超过 max 字 */
-export function splitForTts(text: string, max = CHUNK_MAX_CHARS): string[] {
+export const FIRST_CHUNK_MAX_CHARS = 60;
+
+/** 按句号/问号/换行切段，每段不超过 max 字；首段更短（firstMax），让播放尽快开始 */
+export function splitForTts(text: string, max = CHUNK_MAX_CHARS, firstMax = max): string[] {
   const sentences = text.split(/(?<=[。！？!?；;\n])/).map((s) => s.trim()).filter(Boolean);
   const chunks: string[] = [];
   let cur = "";
+  const limit = () => (chunks.length === 0 ? Math.min(firstMax, max) : max);
   for (let s of sentences) {
+    const max = limit();
     while (s.length > max) {
       // 极长一句：按逗号硬切
       const cut = Math.max(s.lastIndexOf("，", max), s.lastIndexOf(",", max), Math.floor(max / 2));
@@ -108,7 +112,7 @@ export function splitForTts(text: string, max = CHUNK_MAX_CHARS): string[] {
       chunks.push(s.slice(0, cut + 1));
       s = s.slice(cut + 1);
     }
-    if ((cur + s).length > max) {
+    if ((cur + s).length > limit()) {
       if (cur) chunks.push(cur);
       cur = s;
     } else {
@@ -218,49 +222,81 @@ export function cachedFilePath(key: string): string | null {
   return path.join(cfg().cacheDir, `${key}.mp3`);
 }
 
-// 同一段文本正在合成时，后来的请求等它，不重复花钱
-const inFlight = new Map<string, Promise<Buffer>>();
+/** 上游并发闸门：试用账号只有 2 路，超了报 45000292 */
+class Semaphore {
+  private queue: (() => void)[] = [];
+  private active = 0;
+  constructor(private max: number) {}
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.active >= this.max) await new Promise<void>((r) => this.queue.push(r));
+    this.active++;
+    try {
+      return await fn();
+    } finally {
+      this.active--;
+      this.queue.shift()?.();
+    }
+  }
+}
+const upstream = new Semaphore(Math.max(1, Number(process.env.TTS_CONCURRENCY || "2") || 2));
 
-/** 整段回答 → mp3（带磁盘缓存 + 进行中去重） */
-export async function synthesize(
-  markdown: string,
-  signal?: AbortSignal,
-): Promise<{ audio: Buffer; key: string; cached: boolean; chars: number }> {
+// 每段一个后台任务：key → 写好的文件路径
+const chunkJobs = new Map<string, Promise<string>>();
+
+function ensureChunk(key: string, text: string): Promise<string> {
+  const file = cachedFilePath(key)!;
+  let job = chunkJobs.get(key);
+  if (job) return job;
+  job = (async () => {
+    try {
+      await fs.promises.access(file);
+      return file;
+    } catch {
+      /* not cached */
+    }
+    const audio = await upstream.run(() => synthesizeChunk(text, AbortSignal.timeout(60_000)));
+    await fs.promises.mkdir(path.dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.tmp`;
+    await fs.promises.writeFile(tmp, audio);
+    await fs.promises.rename(tmp, file);
+    return file;
+  })();
+  chunkJobs.set(key, job);
+  job.finally(() => chunkJobs.delete(key)).catch(() => {});
+  return job;
+}
+
+/**
+ * 规划一段回答的播报：切段、按顺序排队合成（首段最先），立刻返回各段 key。
+ * 客户端拿第一段就能开播，后面的段在播放期间继续合成。
+ */
+export function prepareSpeech(markdown: string): { keys: string[]; chars: number; texts: string[] } {
   const c = cfg();
   const text = speakableText(markdown);
   if (!text) throw new TtsUpstreamError("没有可朗读的内容");
-  const key = cacheKey(text, c.voice, c.speed);
-  const file = path.join(c.cacheDir, `${key}.mp3`);
+  const texts = splitForTts(text, CHUNK_MAX_CHARS, FIRST_CHUNK_MAX_CHARS);
+  const keys = texts.map((t) => cacheKey(t, c.voice, c.speed));
+  keys.forEach((k, i) => void ensureChunk(k, texts[i]).catch((e) => console.warn("[tts] chunk failed", k.slice(0, 8), e?.message ?? e)));
+  return { keys, chars: text.length, texts };
+}
+
+/** 等某一段就绪：已缓存直接给；合成中就等它；都不是返回 null */
+export async function waitChunkFile(key: string, timeoutMs = 75_000): Promise<string | null> {
+  const file = cachedFilePath(key);
+  if (!file) return null;
+  const job = chunkJobs.get(key);
+  if (job) {
+    const timer = new Promise<null>((r) => setTimeout(() => r(null), timeoutMs));
+    try {
+      return await Promise.race([job, timer]);
+    } catch {
+      return null;
+    }
+  }
   try {
-    const buf = await fs.promises.readFile(file);
-    return { audio: buf, key, cached: true, chars: text.length };
+    await fs.promises.access(file);
+    return file;
   } catch {
-    /* miss */
+    return null;
   }
-  let job = inFlight.get(key);
-  const joined = Boolean(job);
-  if (!job) {
-    job = (async () => {
-      const chunks = splitForTts(text);
-      const parts: Buffer[] = [];
-      // 试用账号上游并发额度是 2；TTS_CONCURRENCY 可调
-      const par = Math.max(1, Number(process.env.TTS_CONCURRENCY || "2") || 2);
-      for (let i = 0; i < chunks.length; i += par) {
-        const batch = chunks.slice(i, i + par).map((t) => synthesizeChunk(t, signal));
-        parts.push(...(await Promise.all(batch)));
-      }
-      const audio = Buffer.concat(parts);
-      try {
-        await fs.promises.mkdir(c.cacheDir, { recursive: true });
-        await fs.promises.writeFile(file, audio);
-      } catch (e) {
-        console.warn("[tts] cache write failed", e);
-      }
-      return audio;
-    })();
-    inFlight.set(key, job);
-    job.finally(() => inFlight.delete(key)).catch(() => {});
-  }
-  const audio = await job;
-  return { audio, key, cached: joined, chars: text.length };
 }
