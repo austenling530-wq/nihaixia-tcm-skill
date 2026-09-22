@@ -18,6 +18,14 @@ describe("tokenize", () => {
   });
 });
 
+describe("cleanQuery", () => {
+  it("strips question scaffolding but keeps symptoms", async () => {
+    const { cleanQuery } = await import("./knowledge");
+    expect(cleanQuery("吹冷风后发烧，怕冷不出汗，这是什么证？用什么方？")).toBe("吹冷风后发烧，怕冷不出汗， ？ ？");
+    expect(cleanQuery("怎么办")).toBe("怎么办");
+  });
+});
+
 describe("formulaNames", () => {
   it("extracts formula names from a question", () => {
     expect(formulaNames("小柴胡汤和桂枝汤能一起用吗")).toEqual(["小柴胡汤", "桂枝汤"]);
@@ -54,6 +62,18 @@ describe("search on the real knowledge base", () => {
     expect(hits.length).toBeGreaterThan(0);
     const joined = hits.map((h) => h.chunk.title + h.chunk.text).join("\n");
     expect(joined).toContain("麻黄汤");
+  });
+
+  it("pins the composition chunk for formulas mentioned in the hits", () => {
+    const hits = idx.search("吹冷风后发烧 38.5°C，怕冷不出汗，浑身酸痛，喉咙不痛，这是什么证？用什么方？");
+    const pinned = hits.filter((h) => h.pinned);
+    expect(pinned.length).toBeGreaterThan(0);
+    const joined = pinned.map((h) => h.chunk.text).join("\n");
+    expect(joined).toMatch(/麻黄汤/);
+    expect(joined).toMatch(/杏仁/);
+    expect(idx.formulaChunkIds("麻黄汤").length).toBeGreaterThan(0);
+    expect(idx.formulaChunkIds("桂枝汤").length).toBeGreaterThan(0);
+    expect(idx.formulaChunkIds("小柴胡汤").length).toBeGreaterThan(0);
   });
 
   it("finds the formula section when asked by name", () => {

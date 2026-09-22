@@ -7,7 +7,8 @@ import json,re
 s=json.load(open('/Users/aoray/movie-narrator/app/settings.json'))
 key=(s.get('api_key') or '').strip()
 base=(s.get('api_base') or '').strip() or 'https://api.90087.cn/v1'
-model=(s.get('text_model') or '').strip() or 'gpt-5.4'
+model=(s.get('text_model') or '').strip()
+if not model or model.startswith('__'): model='gpt-5.4'
 assert key, 'settings.json 里 api_key 是空的'
 env=open('.env').read()
 def put(k,v):

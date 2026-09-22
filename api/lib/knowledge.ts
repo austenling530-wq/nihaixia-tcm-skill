@@ -15,7 +15,7 @@ export type Chunk = {
   weight: number;
 };
 
-export type Hit = { chunk: Chunk; score: number };
+export type Hit = { chunk: Chunk; score: number; pinned?: boolean };
 
 const MAX_CHUNK = 1400;
 const TARGET_CHUNK = 1000;
@@ -88,6 +88,16 @@ export function tokenize(s: string): string[] {
     for (let i = 0; i + 1 < run.length; i++) out.push(run.slice(i, i + 2));
   }
   return out;
+}
+
+// 提问里的套话（"这是什么证""用什么方""怎么办"）对检索只有干扰，先剥掉
+const QUERY_NOISE =
+  /这是什么证|是什么证|什么证|用什么方|开什么方|什么方子|什么方|怎么办|怎么治|怎么看|怎么样|怎么|如何|什么|为什么|请问|我想问|想问一下|帮我看看|帮我|一下|可以吗|行吗|好不好|是不是|有没有|对不对|能不能|应该|需要|倪师|倪老师|老师|您好|你好|谢谢|请|吗|呢|啊|吧|的话/g;
+
+export function cleanQuery(q: string): string {
+  const cleaned = q.replace(QUERY_NOISE, " ").replace(/\s+/g, " ").trim();
+  // 剥完什么都不剩（"怎么办"这种）就用原句
+  return cleaned.replace(/[^\u3400-\u9fffa-zA-Z0-9]/g, "").length >= 2 ? cleaned : q;
 }
 
 function cleanHeading(h: string): string {
@@ -193,6 +203,8 @@ export class KnowledgeIndex {
   readonly chunks: Chunk[] = [];
   /** 语料里出现过的方名（xx汤/散/丸…），按长度降序，用于检索加权 */
   readonly formulaDict: string[] = [];
+  /** 方名 → 该方"原方组成/剂量"最靠谱的 1～2 个块，回答涉方时强制带上 */
+  private formulaChunks = new Map<string, number[]>();
   private postings = new Map<string, Postings>();
   private docLen: Float32Array = new Float32Array(0);
   private avgLen = 1;
@@ -231,6 +243,7 @@ export class KnowledgeIndex {
       }
     }
     this.formulaDict.push(...Array.from(dict).sort((a, b) => b.length - a.length));
+    this.buildFormulaChunks();
 
     const tmp = new Map<string, number[]>(); // token -> [id, tf, id, tf, ...]
     this.docLen = new Float32Array(this.chunks.length);
@@ -260,7 +273,47 @@ export class KnowledgeIndex {
     }
   }
 
-  search(query: string, opts: { limit?: number; maxChars?: number; perFile?: number } = {}): Hit[] {
+  private buildFormulaChunks() {
+    // "麻黄汤"不能匹配到"射干麻黄汤"：出现位置前一个字不能是汉字
+    const hasExact = (s: string, name: string): boolean => {
+      let i = s.indexOf(name);
+      while (i >= 0) {
+        const prev = i > 0 ? s.charCodeAt(i - 1) : 0;
+        if (!(prev >= 0x3400 && prev <= 0x9fff)) return true;
+        i = s.indexOf(name, i + 1);
+      }
+      return false;
+    };
+    const dosage = /[一二三四五六七八九十半两升枚个斤合钱]\s*[)）]|[(（][一二三四五六七八九十半]+[两升枚个斤合钱]/;
+    for (const name of this.formulaDict) {
+      const scored: { id: number; s: number }[] = [];
+      for (const c of this.chunks) {
+        const inTitle = hasExact(c.title, name);
+        if (!inTitle && !hasExact(c.text, name)) continue;
+        let s = 0;
+        if (inTitle) s += 2;
+        if (inTitle && (c.title.endsWith(name + "方") || c.title.includes(name + "组成") || c.title.includes(name + "方剂"))) s += 4;
+        if (c.text.includes(`| ${name} |`) || c.text.includes(`| **${name}** |`)) s += 4; // 剂量速查表的行
+        if (hasExact(c.text, name + "方")) s += 1;
+        if (dosage.test(c.text)) s += 2;
+        if (c.file.startsWith("references/distilled/")) s += 1;
+        if (s >= 4) scored.push({ id: c.id, s });
+      }
+      if (!scored.length) continue;
+      scored.sort((a, b) => b.s - a.s);
+      this.formulaChunks.set(
+        name,
+        scored.slice(0, 2).map((x) => x.id),
+      );
+    }
+  }
+
+  /** 该方的原方/剂量块 id */
+  formulaChunkIds(name: string): number[] {
+    return this.formulaChunks.get(name) ?? [];
+  }
+
+  search(query: string, opts: { limit?: number; maxChars?: number; perFile?: number; pinnedMaxChars?: number } = {}): Hit[] {
     const limit = opts.limit ?? 8;
     const maxChars = opts.maxChars ?? 9000;
     const perFile = opts.perFile ?? 3;
@@ -268,7 +321,7 @@ export class KnowledgeIndex {
     if (!N) return [];
     const k1 = 1.2;
     const b = 0.75;
-    const qToks = Array.from(new Set(tokenize(query)));
+    const qToks = Array.from(new Set(tokenize(cleanQuery(query))));
     const scores = new Float64Array(N);
     for (const t of qToks) {
       const p = this.postings.get(t);
@@ -314,6 +367,22 @@ export class KnowledgeIndex {
       perFileCount.set(h.chunk.file, n + 1);
       chars += h.chunk.text.length;
       if (out.length >= limit) break;
+    }
+
+    // 涉方必带原方：问题里点名的方 + 前 5 个命中标题里出现的方，各补 1～2 块组成/剂量
+    const mentioned = new Set<string>(names);
+    for (const h of out.slice(0, 5)) for (const n of formulaNames(h.chunk.title, this.formulaDict)) mentioned.add(n);
+    const have = new Set(out.map((h) => h.chunk.id));
+    let pinnedChars = 0;
+    for (const name of Array.from(mentioned).slice(0, 4)) {
+      for (const id of this.formulaChunkIds(name)) {
+        if (have.has(id)) continue;
+        const c = this.chunks[id];
+        if (pinnedChars + c.text.length > (opts.pinnedMaxChars ?? 5000)) continue;
+        out.push({ chunk: c, score: 0, pinned: true });
+        have.add(id);
+        pinnedChars += c.text.length;
+      }
     }
     return out;
   }
@@ -491,7 +560,7 @@ export function getCorePrompt(): string {
 export function formatReferences(hits: Hit[]): string {
   if (!hits.length) return "〔参考资料〕（本次未检索到直接相关的段落；库内无专条时请按规则先声明，再按六经辨证给思路）";
   const body = hits
-    .map((h, i) => `[${i + 1}] ${h.chunk.title}\n${h.chunk.text}`)
+    .map((h, i) => `[${i + 1}]${h.pinned ? "【原方/剂量】" : ""} ${h.chunk.title}\n${h.chunk.text}`)
     .join("\n\n");
   return `〔参考资料〕（系统从知识库检索，供你引用；不要向用户提及这一节的存在）\n\n${body}`;
 }
