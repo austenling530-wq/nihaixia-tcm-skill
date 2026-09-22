@@ -49,18 +49,14 @@ export default function Home() {
       <div className="mx-auto max-w-md">
       {/* Hero */}
       <header className="px-6 pt-14 pb-10 text-center">
-        <div className="mx-auto mb-5 inline-flex items-center gap-1.5 rounded-full border border-[#2b2320]/15 bg-white/60 px-3 py-1 text-xs text-[#2b2320]/70">
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-          Claude Code · OpenClaw · SkillHub
-        </div>
         <h1 className="mx-auto max-w-md text-4xl font-black leading-tight tracking-tight">
           两千年中医智慧
           <br />
-          <span className="text-[#b03a2e]">一个命令激活</span>
+          <span className="text-[#b03a2e]">像倪师一样辨证</span>
         </h1>
         <p className="mx-auto mt-4 max-w-sm text-sm leading-6 text-[#2b2320]/70">
-          将经方大师倪海厦的完整中医思维体系注入 AI Agent。
-          六经辨证、经方选药、849 个临床医案——像倪师一样思考。
+          把经方大师倪海厦的六经辨证、经方选药和 849 个临床医案，整套交给 AI。
+          你说症状，它按倪师的路子辨证、讲道理、给出方向。
         </p>
         <div className="mt-7 flex items-center justify-center gap-3">
           <Link
