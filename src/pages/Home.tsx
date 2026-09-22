@@ -5,11 +5,6 @@ import {
   Landmark,
   Leaf,
   MessageCircle,
-  Github,
-  Terminal,
-  ShieldCheck,
-  Layers,
-  Star,
 } from "lucide-react";
 
 const stats = [
@@ -48,15 +43,6 @@ const books = [
 
 const UPSTREAM = "https://github.com/jangviktor-web/nihaixia";
 
-const badges = [
-  { icon: Star, text: "开源项目 v2.3.1" },
-  { icon: Layers, text: "支持多个 Agent 运行时" },
-  { icon: ShieldCheck, text: "MulanPSL-2.0 开源协议" },
-  { icon: Terminal, text: "Agent Skills 标准" },
-];
-
-const runtimes = ["Claude Code", "OpenClaw", "SkillHub", "Kimi CLI", "Cursor", "腾讯 ima"];
-
 export default function Home() {
   return (
     <div className="min-h-screen bg-[#f6f1e6] text-[#2b2320] antialiased">
@@ -83,14 +69,6 @@ export default function Home() {
           >
             立即体验问答
           </Link>
-          <a
-            href={UPSTREAM}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1.5 rounded-xl border border-[#2b2320]/20 bg-white/70 px-5 py-3 text-sm font-semibold active:scale-95 transition"
-          >
-            <Github className="h-4 w-4" /> GitHub
-          </a>
         </div>
       </header>
 
@@ -172,46 +150,15 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Badges & runtimes */}
-      <section className="px-5 pt-12">
-        <div className="grid grid-cols-2 gap-2.5">
-          {badges.map((b) => (
-            <div
-              key={b.text}
-              className="flex items-center gap-2 rounded-xl border border-[#2b2320]/10 bg-white/70 px-3 py-2.5 text-xs font-semibold"
-            >
-              <b.icon className="h-4 w-4 shrink-0 text-[#b03a2e]" />
-              {b.text}
-            </div>
-          ))}
-        </div>
-        <div className="mt-4 flex flex-wrap justify-center gap-2">
-          {runtimes.map((r) => (
-            <span
-              key={r}
-              className="rounded-full border border-[#2b2320]/15 px-3 py-1 text-[11px] text-[#2b2320]/70"
-            >
-              {r}
-            </span>
-          ))}
-        </div>
-      </section>
-
-      {/* Install */}
-      <section className="mx-5 mt-12 rounded-2xl bg-[#2b2320] p-6 text-[#f6f1e6]">
-        <h2 className="text-xl font-black">一个命令，装进你的 Agent</h2>
-        <div className="mt-4 overflow-x-auto rounded-xl bg-black/40 p-4 font-mono text-xs leading-6 text-emerald-300">
-          <div className="whitespace-nowrap">openclaw skills install @jangviktor-web/nihaixia</div>
-          <div className="mt-1 whitespace-nowrap text-emerald-300/70">git clone {UPSTREAM}.git</div>
-        </div>
-        <p className="mt-3 text-xs leading-5 text-[#f6f1e6]/60">
-          Claude Code、OpenClaw、SkillHub、腾讯 ima 等运行时均可安装，详见项目 README。
-        </p>
-      </section>
-
       {/* Footer */}
       <footer className="px-6 py-10 text-center text-[11px] leading-5 text-[#2b2320]/50">
-        <p>本站为开源项目 nihaixia skill 的非官方介绍与学习交流页，与倪海厦先生及其家属、汉唐中医无隶属关系。</p>
+        <p>
+          本站为开源项目{" "}
+          <a href={UPSTREAM} target="_blank" rel="noreferrer" className="underline decoration-dotted">
+            nihaixia skill
+          </a>{" "}
+          的非官方介绍与学习交流页，与倪海厦先生及其家属、汉唐中医无隶属关系。
+        </p>
         <p className="mt-1">内容不构成任何医疗建议 · 问答功能仅供经方学习演示 · 知识库遵循 MulanPSL-2.0</p>
       </footer>
       </div>
