@@ -1,4 +1,5 @@
 import { Link } from "react-router";
+import { KefuButton } from "@/components/Kefu";
 import {
   BookOpen,
   ScrollText,
@@ -66,6 +67,9 @@ export default function Home() {
             立即体验问答
           </Link>
         </div>
+        <KefuButton className="mt-4 inline-flex items-center gap-1.5 text-xs text-[#2b2320]/60 underline decoration-dotted underline-offset-4">
+          没有口令？联系客服领取
+        </KefuButton>
       </header>
 
       {/* Stats */}

@@ -3,7 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { createRouter, publicQuery } from "./middleware";
 import { issueToken } from "./token";
 import { countTodayUsage, findInviteByCode } from "./queries/invites";
-import { AskError, answerQuestion, checkVerifyAllowed, verifyLock } from "./service";
+import { AskError, answerQuestion, checkInviteUsable, checkVerifyAllowed, verifyLock } from "./service";
 import { aiConfigured, aiModel } from "./ai";
 
 export const askInput = z.object({
@@ -39,12 +39,21 @@ export const askRouter = createRouter({
         });
       }
       verifyLock.reset(ctx.ip);
+      let usedTotal = 0;
+      try {
+        usedTotal = await checkInviteUsable(invite, invite.id);
+      } catch (e) {
+        toTrpc(e);
+      }
       const used = await countTodayUsage(invite.id);
       return {
         token: issueToken(invite.id),
         label: invite.label,
         dailyLimit: invite.dailyLimit,
         usedToday: used,
+        expiresAt: invite.expiresAt ? invite.expiresAt.toISOString() : null,
+        totalLimit: invite.totalLimit,
+        usedTotal,
       };
     }),
 

@@ -60,7 +60,12 @@ app.post("/api/ask/stream", async (c) => {
       });
       await stream.writeSSE({
         event: "done",
-        data: JSON.stringify({ usedToday: result.usedToday, dailyLimit: result.dailyLimit }),
+        data: JSON.stringify({
+          usedToday: result.usedToday,
+          dailyLimit: result.dailyLimit,
+          usedTotal: result.usedTotal,
+          totalLimit: result.totalLimit,
+        }),
       });
     } catch (e) {
       const err = e instanceof AskError ? e : new AskError("INTERNAL_SERVER_ERROR", "服务出错，请稍后再试");
@@ -71,7 +76,7 @@ app.post("/api/ask/stream", async (c) => {
 });
 
 // 前端功能开关
-app.get("/api/config", (c) => c.json({ tts: ttsEnabled() }));
+app.get("/api/config", (c) => c.json({ tts: ttsEnabled(), kefuNote: process.env.KEFU_NOTE || "" }));
 
 // 语音播报：把一段回答合成 mp3。持令牌、按口令与 IP 限速。
 const ttsInput = z.object({ token: z.string().min(10).max(512), text: z.string().trim().min(2).max(6000) });

@@ -17,6 +17,9 @@ export const inviteCodes = mysqlTable("invite_codes", {
   label: varchar("label", { length: 128 }).notNull().default(""),
   dailyLimit: int("daily_limit").notNull().default(20),
   active: boolean("active").notNull().default(true),
+  expiresAt: timestamp("expires_at"), // 到期时间；NULL = 永久
+  totalLimit: int("total_limit"), // 总次数上限（试用口令用）；NULL = 不限
+  channel: varchar("channel", { length: 64 }).notNull().default(""), // 分销员 / 渠道
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

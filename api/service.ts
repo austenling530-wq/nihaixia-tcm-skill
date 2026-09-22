@@ -5,7 +5,7 @@ import { verifyToken } from "./token";
 import { AIConfigError, AIUpstreamError, chatCompletion, type ChatMsg } from "./ai";
 import { formatReferences, getCorePrompt, getIndex } from "./lib/knowledge";
 import { FailureLock, InFlight, SlidingWindow, formatWait } from "./lib/ratelimit";
-import { countTodayUsage, findInviteById, insertChatLog } from "./queries/invites";
+import { countTodayUsage, countTotalUsage, findInviteById, insertChatLog } from "./queries/invites";
 
 export type AskErrorCode = "UNAUTHORIZED" | "FORBIDDEN" | "TOO_MANY_REQUESTS" | "INTERNAL_SERVER_ERROR";
 
@@ -30,6 +30,24 @@ export const askPerCode = new SlidingWindow(6, 60_000);
 export const askPerIp = new SlidingWindow(10, 60_000);
 /** 同一口令同时只答一个问题 */
 export const askInFlight = new InFlight();
+
+type InviteRow = { active: boolean; expiresAt: Date | null; totalLimit: number | null; dailyLimit: number };
+
+/** 口令能不能用：停用 / 到期 / 试用次数用完。返回已用总次数（试用口令要显示） */
+export async function checkInviteUsable(invite: InviteRow | undefined, codeId: number): Promise<number> {
+  if (!invite || !invite.active) throw new AskError("FORBIDDEN", "该口令已被停用，请联系客服");
+  if (invite.expiresAt && invite.expiresAt.getTime() < Date.now()) {
+    throw new AskError("FORBIDDEN", "该口令已到期，请联系客服续期");
+  }
+  if (invite.totalLimit != null) {
+    const usedTotal = await countTotalUsage(codeId);
+    if (usedTotal >= invite.totalLimit) {
+      throw new AskError("FORBIDDEN", `试用口令的 ${invite.totalLimit} 次已用完，请联系客服获取正式口令`);
+    }
+    return usedTotal;
+  }
+  return 0;
+}
 
 export function checkVerifyAllowed(ip: string) {
   const locked = verifyLock.lockedFor(ip);
@@ -66,7 +84,8 @@ export async function answerQuestion(params: {
   if (!codeId) throw new AskError("UNAUTHORIZED", "访问令牌已失效，请重新输入口令");
 
   const invite = await findInviteById(codeId);
-  if (!invite || !invite.active) throw new AskError("FORBIDDEN", "该口令已被停用");
+  const usedTotal = await checkInviteUsable(invite, codeId);
+  if (!invite) throw new AskError("FORBIDDEN", "该口令已被停用");
 
   const ipW = askPerIp.hit(params.ip);
   if (!ipW.ok) throw new AskError("TOO_MANY_REQUESTS", `提问太频繁，请 ${formatWait(ipW.retryAfterMs)}后再试`);
@@ -119,7 +138,14 @@ export async function answerQuestion(params: {
       sources,
       durationMs: Date.now() - t0,
     });
-    return { answer, sources, usedToday: used + 1, dailyLimit: invite.dailyLimit };
+    return {
+      answer,
+      sources,
+      usedToday: used + 1,
+      dailyLimit: invite.dailyLimit,
+      usedTotal: usedTotal + 1,
+      totalLimit: invite.totalLimit,
+    };
   } finally {
     askInFlight.release(String(codeId));
   }

@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
-import { ArrowLeft, Loader2, Send, KeyRound, RotateCcw, Volume2, Square } from "lucide-react";
+import { ArrowLeft, Loader2, Send, KeyRound, RotateCcw, Volume2, Square, MessageCircleMore } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { trpc } from "@/providers/trpc";
+import { KefuButton } from "@/components/Kefu";
 
 type Msg = { role: "user" | "ai"; text: string; sources?: string[]; error?: boolean };
+type Quota = { used: number; limit: number; usedTotal?: number; totalLimit?: number | null };
 
 const TOKEN_KEY = "nh_token";
 const MSGS_KEY = "nh_msgs";
 const MAX_SAVED = 40;
+const NOTICE_KEY = "nh_notice_v1"; // 用户须知已确认
 
 function loadMsgs(): Msg[] {
   try {
@@ -70,7 +73,10 @@ export default function Ask() {
       .catch(() => {});
   }, []);
   const [code, setCode] = useState("");
-  const [quota, setQuota] = useState<{ used: number; limit: number } | null>(null);
+  const [quota, setQuota] = useState<Quota | null>(null);
+  const [expiresAt, setExpiresAt] = useState<string | null>(null);
+  // 首次进入先看一遍用户须知；验证通过后先把令牌暂存，点"我知道了"再放行
+  const [pendingToken, setPendingToken] = useState<string | null>(null);
   const [msgs, setMsgs] = useState<Msg[]>(loadMsgs);
   const [input, setInput] = useState("");
   const [error, setError] = useState("");
@@ -94,8 +100,33 @@ export default function Ask() {
     return () => clearInterval(id);
   }, [pending]);
 
+  const acceptNotice = () => {
+    try {
+      localStorage.setItem(NOTICE_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+    if (pendingToken) {
+      localStorage.setItem(TOKEN_KEY, pendingToken);
+      setToken(pendingToken);
+      setPendingToken(null);
+    }
+  };
+
   const verify = trpc.ask.verify.useMutation({
     onSuccess: (d) => {
+      setExpiresAt(d.expiresAt ?? null);
+      setQuota({ used: d.usedToday, limit: d.dailyLimit, usedTotal: d.usedTotal, totalLimit: d.totalLimit });
+      let seen = false;
+      try {
+        seen = localStorage.getItem(NOTICE_KEY) === "1";
+      } catch {
+        /* ignore */
+      }
+      if (!seen) {
+        setPendingToken(d.token);
+        return;
+      }
       localStorage.setItem(TOKEN_KEY, d.token);
       setToken(d.token);
       setQuota({ used: d.usedToday, limit: d.dailyLimit });
@@ -138,7 +169,13 @@ export default function Ask() {
           else if (e.event === "delta") {
             text += e.data;
             setStreaming(text);
-          } else if (e.event === "done") setQuota({ used: e.data.usedToday, limit: e.data.dailyLimit });
+          } else if (e.event === "done")
+            setQuota({
+              used: e.data.usedToday,
+              limit: e.data.dailyLimit,
+              usedTotal: e.data.usedTotal,
+              totalLimit: e.data.totalLimit,
+            });
           else if (e.event === "error") failed = e.data;
         });
         if (!failed && !text) failed = { code: "EMPTY", message: "没有收到回答，请重试" };
@@ -202,7 +239,11 @@ export default function Ask() {
           >
             {verify.isPending ? "验证中…" : "进入问答"}
           </button>
+          <KefuButton className="mt-5 inline-flex items-center gap-1.5 text-xs text-[#2b2320]/60 underline decoration-dotted underline-offset-4">
+            没有口令？联系客服领取
+          </KefuButton>
         </div>
+        <NoticeModal open={pendingToken !== null} onAccept={acceptNotice} />
       </div>
     );
   }
@@ -210,7 +251,7 @@ export default function Ask() {
   // ── 对话页 ──────────────────────────────
   return (
     <div className="flex h-dvh flex-col bg-[#f6f1e6] text-[#2b2320]">
-      <GateHeader quota={quota} onReset={msgs.length ? reset : undefined} />
+      <GateHeader quota={quota} expiresAt={expiresAt} onReset={msgs.length ? reset : undefined} />
 
       <div className="flex-1 space-y-3 overflow-y-auto px-4 py-5">
         {msgs.length === 0 && !pending && (
@@ -457,11 +498,20 @@ function Markdown({ text }: { text: string }) {
   );
 }
 
+function quotaText(q: Quota | null | undefined, expiresAt?: string | null): string {
+  if (!q) return "私域口令";
+  if (q.totalLimit != null) return `试用 ${q.usedTotal ?? 0}/${q.totalLimit}`;
+  const exp = expiresAt ? ` · ${new Date(expiresAt).getMonth() + 1}/${new Date(expiresAt).getDate()} 到期` : "";
+  return `今日 ${q.used}/${q.limit}${exp}`;
+}
+
 function GateHeader({
   quota,
+  expiresAt,
   onReset,
 }: {
-  quota?: { used: number; limit: number } | null;
+  quota?: Quota | null;
+  expiresAt?: string | null;
   onReset?: () => void;
 }) {
   return (
@@ -470,8 +520,11 @@ function GateHeader({
         <ArrowLeft className="h-4 w-4" /> 返回介绍
       </Link>
       <span className="text-sm font-black">经方问答</span>
-      <span className="flex items-center gap-2 text-[11px] text-[#2b2320]/50">
-        {quota ? `今日 ${quota.used}/${quota.limit}` : "私域口令"}
+      <span className="flex items-center gap-1.5 text-[11px] text-[#2b2320]/50">
+        {quotaText(quota, expiresAt)}
+        <KefuButton className="rounded-md p-1 hover:bg-[#2b2320]/5 text-[#b03a2e]">
+          <MessageCircleMore className="h-4 w-4" />
+        </KefuButton>
         {onReset && (
           <button onClick={onReset} className="rounded-md p-1 hover:bg-[#2b2320]/5" aria-label="新对话" title="新对话">
             <RotateCcw className="h-3.5 w-3.5" />
@@ -479,5 +532,29 @@ function GateHeader({
         )}
       </span>
     </header>
+  );
+}
+
+// 首次进入的用户须知：必须点"我知道了"
+function NoticeModal({ open, onAccept }: { open: boolean; onAccept: () => void }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-4 sm:items-center">
+      <div className="w-full max-w-sm rounded-2xl bg-white p-6 text-[#2b2320] shadow-xl">
+        <h2 className="text-lg font-black">使用前请看一眼</h2>
+        <ul className="mt-3 space-y-2 text-sm leading-6 text-[#2b2320]/80">
+          <li>1. 这里的回答是 AI 根据倪海厦先生公开讲义和医案整理生成的<b>学习资料</b>，不是医生的诊断，也不是处方。</li>
+          <li>2. 身体不舒服请找<b>执业中医师面诊</b>后再用药，不要照着回答自行抓药；急症请立即就医。</li>
+          <li>3. 本站与倪海厦先生及其家属、汉唐中医没有隶属关系。</li>
+          <li>4. 口令仅供本人使用，问答记录会保存用于限次。</li>
+        </ul>
+        <button
+          onClick={onAccept}
+          className="mt-5 w-full rounded-xl bg-[#b03a2e] py-3 text-sm font-bold text-white active:scale-95 transition"
+        >
+          我知道了，进入问答
+        </button>
+      </div>
+    </div>
   );
 }
