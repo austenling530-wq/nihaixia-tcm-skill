@@ -221,7 +221,7 @@ export default function Ask() {
           <Bubble key={i} msg={m} />
         ))}
         {pending && (
-          <div className="mr-4 rounded-2xl rounded-tl-sm border border-[#2b2320]/10 bg-white px-4 py-3 text-sm leading-6 shadow-sm">
+          <div className="rounded-2xl rounded-tl-sm border border-[#2b2320]/10 bg-white px-4 py-3 text-sm leading-6 shadow-sm">
             {streaming ? (
               <Markdown text={streaming} />
             ) : (
@@ -278,13 +278,13 @@ function Bubble({ msg }: { msg: Msg }) {
   }
   if (msg.error) {
     return (
-      <div className="mr-4 rounded-2xl rounded-tl-sm border border-[#b03a2e]/30 bg-[#b03a2e]/5 px-4 py-3 text-sm leading-6 text-[#b03a2e]">
+      <div className="rounded-2xl rounded-tl-sm border border-[#b03a2e]/30 bg-[#b03a2e]/5 px-4 py-3 text-sm leading-6 text-[#b03a2e]">
         {msg.text}
       </div>
     );
   }
   return (
-    <div className="mr-4 rounded-2xl rounded-tl-sm border border-[#2b2320]/10 bg-white px-4 py-3 text-sm leading-6 shadow-sm">
+    <div className="rounded-2xl rounded-tl-sm border border-[#2b2320]/10 bg-white px-4 py-3 text-sm leading-6 shadow-sm">
       <Markdown text={msg.text} />
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-[#2b2320]/10 pt-2 text-[10px] text-[#2b2320]/45">
         <span>AI 生成</span>
@@ -308,7 +308,18 @@ function Bubble({ msg }: { msg: Msg }) {
 function Markdown({ text }: { text: string }) {
   return (
     <div className="md">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          table: ({ node: _n, ...props }) => (
+            <div className="tbl">
+              <table {...props} />
+            </div>
+          ),
+        }}
+      >
+        {text}
+      </ReactMarkdown>
     </div>
   );
 }
