@@ -1,39 +1,37 @@
-// 语音播报：豆包（火山引擎）语音合成 HTTP 接口
+// 语音播报：豆包（火山引擎）语音合成 —— 新版控制台 API Key + V3 单向流式 HTTP 接口
 //
 // 环境变量：
-//   TTS_APP_ID        火山引擎语音技术 → 应用管理 里的 APP ID
-//   TTS_ACCESS_TOKEN  同一页面的 Access Token
+//   TTS_API_KEY       火山引擎语音控制台 → API Key 管理 里创建的 Key（UUID 样式；不是方舟的 ark- 开头那种）
 //   TTS_VOICE         音色，默认 zh_male_qingcang_mars_bigtts（擎苍：沉稳男中音，讲课感）
-//   TTS_CLUSTER       默认 volcano_tts（大模型音色统一用这个集群）
+//   TTS_RESOURCE_ID   默认 seed-tts-1.0；用 2.0 音色（*_uranus_bigtts）时填 seed-tts-2.0
 //   TTS_SPEED         语速倍率，默认 1.0
 //   TTS_CACHE_DIR     mp3 缓存目录，默认 .cache/tts；同一段回答只合成一次
 //
-// 单次请求文本上限 1024 字节（约 300 个汉字），所以长回答按句切段、逐段合成、拼接 mp3。
+// 长回答按句切段、逐段合成、拼接 mp3，既控制单次时长也让首段快些出来。
 // Markdown 先转成"能念出来"的纯文本：表格拆成句子、去掉符号和表情。
 
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-const ENDPOINT = "https://openspeech.bytedance.com/api/v1/tts";
+const ENDPOINT = "https://openspeech.bytedance.com/api/v3/tts/unidirectional";
 export const CHUNK_MAX_CHARS = 280;
 
 export class TtsConfigError extends Error {}
 export class TtsUpstreamError extends Error {}
 
 export function ttsEnabled(): boolean {
-  return Boolean(process.env.TTS_APP_ID && process.env.TTS_ACCESS_TOKEN);
+  return Boolean(process.env.TTS_API_KEY);
 }
 
 function cfg() {
-  const appid = process.env.TTS_APP_ID ?? "";
-  const token = process.env.TTS_ACCESS_TOKEN ?? "";
-  if (!appid || !token) throw new TtsConfigError("TTS_APP_ID / TTS_ACCESS_TOKEN 未配置");
+  const apiKey = process.env.TTS_API_KEY ?? "";
+  if (!apiKey) throw new TtsConfigError("TTS_API_KEY 未配置");
+  const voice = process.env.TTS_VOICE || "zh_male_qingcang_mars_bigtts";
   return {
-    appid,
-    token,
-    voice: process.env.TTS_VOICE || "zh_male_qingcang_mars_bigtts",
-    cluster: process.env.TTS_CLUSTER || "volcano_tts",
+    apiKey,
+    voice,
+    resourceId: process.env.TTS_RESOURCE_ID || (voice.includes("_uranus_") ? "seed-tts-2.0" : "seed-tts-1.0"),
     speed: Number(process.env.TTS_SPEED || "1.0") || 1.0,
     cacheDir: process.env.TTS_CACHE_DIR || path.resolve(".cache/tts"),
   };
@@ -121,24 +119,75 @@ export function splitForTts(text: string, max = CHUNK_MAX_CHARS): string[] {
   return chunks;
 }
 
+/** 响应是若干个 JSON 对象直接拼接（可能不换行），逐个切出来 */
+export function* splitJsonObjects(buf: string): Generator<string> {
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  let start = -1;
+  for (let i = 0; i < buf.length; i++) {
+    const ch = buf[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        yield buf.slice(start, i + 1);
+        start = -1;
+      }
+    }
+  }
+}
+
 async function synthesizeChunk(text: string, signal?: AbortSignal): Promise<Buffer> {
   const c = cfg();
-  const body = {
-    app: { appid: c.appid, token: c.token, cluster: c.cluster },
-    user: { uid: "nihaixia-web" },
-    audio: { voice_type: c.voice, encoding: "mp3", speed_ratio: c.speed, rate: 24000 },
-    request: { reqid: crypto.randomUUID(), text, text_type: "plain", operation: "query" },
-  };
   const resp = await fetch(ENDPOINT, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer;${c.token}` },
-    body: JSON.stringify(body),
+    headers: {
+      "Content-Type": "application/json",
+      "X-Api-Key": c.apiKey,
+      "X-Api-Resource-Id": c.resourceId,
+      "X-Api-Request-Id": crypto.randomUUID(),
+    },
+    body: JSON.stringify({
+      user: { uid: "nihaixia-web" },
+      req_params: {
+        text,
+        speaker: c.voice,
+        audio_params: {
+          format: "mp3",
+          sample_rate: 24000,
+          // 语速：-50~100，0 为原速；只在改过时才带，避免上游不认
+          ...(c.speed !== 1 ? { speech_rate: Math.round((c.speed - 1) * 100) } : {}),
+        },
+      },
+    }),
     signal,
   });
-  if (!resp.ok) throw new TtsUpstreamError(`HTTP ${resp.status}`);
-  const j = (await resp.json()) as { code?: number; message?: string; data?: string };
-  if (j.code !== 3000 || !j.data) throw new TtsUpstreamError(`${j.code ?? "?"} ${j.message ?? "无音频返回"}`);
-  return Buffer.from(j.data, "base64");
+  if (!resp.ok) throw new TtsUpstreamError(`HTTP ${resp.status} ${(await resp.text()).slice(0, 200)}`);
+  const raw = await resp.text();
+  const parts: Buffer[] = [];
+  for (const obj of splitJsonObjects(raw)) {
+    let j: { code?: number; message?: string; data?: string };
+    try {
+      j = JSON.parse(obj);
+    } catch {
+      continue;
+    }
+    if (j.data) parts.push(Buffer.from(j.data, "base64"));
+    // 20000000 = 流结束标记，不是错误
+    if (j.code && j.code !== 20000000) throw new TtsUpstreamError(`${j.code} ${j.message ?? ""}`.trim());
+  }
+  if (!parts.length) throw new TtsUpstreamError("上游没有返回音频");
+  return Buffer.concat(parts);
 }
 
 function cacheKey(text: string, voice: string, speed: number): string {
@@ -160,9 +209,10 @@ export async function synthesize(markdown: string, signal?: AbortSignal): Promis
   }
   const chunks = splitForTts(text);
   const parts: Buffer[] = [];
-  // 两段并发，兼顾速度和上游 QPS 限制
-  for (let i = 0; i < chunks.length; i += 2) {
-    const batch = chunks.slice(i, i + 2).map((t) => synthesizeChunk(t, signal));
+  // 四段并发（TTS_CONCURRENCY 可调），兼顾速度和上游并发限制
+  const par = Math.max(1, Number(process.env.TTS_CONCURRENCY || "4") || 4);
+  for (let i = 0; i < chunks.length; i += par) {
+    const batch = chunks.slice(i, i + par).map((t) => synthesizeChunk(t, signal));
     parts.push(...(await Promise.all(batch)));
   }
   const audio = Buffer.concat(parts);

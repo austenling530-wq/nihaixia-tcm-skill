@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { speakableText, splitForTts } from "./tts";
+import { speakableText, splitForTts, splitJsonObjects } from "./tts";
 
 const sample = `我跟你说，这是**少阴寒化**。
 
@@ -57,5 +57,12 @@ describe("splitForTts", () => {
     const chunks = splitForTts(s, 280);
     expect(chunks.every((c) => c.length <= 280)).toBe(true);
     expect(chunks.join("")).toBe(s);
+  });
+});
+
+describe("splitJsonObjects", () => {
+  it("splits concatenated objects with or without newlines", () => {
+    const raw = '{"code":0,"data":"AA=="}{"code":0,"data":"BB=="}\n{"code":20000000,"message":"}"}';
+    expect([...splitJsonObjects(raw)].map((o) => JSON.parse(o).code)).toEqual([0, 0, 20000000]);
   });
 });
