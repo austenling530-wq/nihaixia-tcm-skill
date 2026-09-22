@@ -9,6 +9,11 @@ import { env } from "./lib/env";
 import { askInput } from "./ask";
 import { AskError, answerQuestion } from "./service";
 import { getCorePrompt, getIndex } from "./lib/knowledge";
+import { z } from "zod";
+import { verifyToken } from "./token";
+import { findInviteById } from "./queries/invites";
+import { SlidingWindow } from "./lib/ratelimit";
+import { TtsConfigError, TtsUpstreamError, synthesize, ttsEnabled } from "./tts";
 
 const app = new Hono<{ Bindings: HttpBindings }>();
 
@@ -62,6 +67,54 @@ app.post("/api/ask/stream", async (c) => {
       await stream.writeSSE({ event: "error", data: JSON.stringify({ code: err.code, message: err.message }) });
     }
   });
+});
+
+// 前端功能开关
+app.get("/api/config", (c) => c.json({ tts: ttsEnabled() }));
+
+// 语音播报：把一段回答合成 mp3。持令牌、按口令与 IP 限速。
+const ttsInput = z.object({ token: z.string().min(10).max(512), text: z.string().trim().min(2).max(6000) });
+const ttsPerCode = new SlidingWindow(8, 60_000);
+const ttsPerIp = new SlidingWindow(12, 60_000);
+app.post("/api/tts", async (c) => {
+  const ip = clientIp(c.req.raw.headers, socketIp(c));
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "请求体不是 JSON" }, 400);
+  }
+  const parsed = ttsInput.safeParse(body);
+  if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message ?? "参数错误" }, 400);
+  const codeId = verifyToken(parsed.data.token);
+  if (!codeId) return c.json({ error: "访问令牌已失效，请重新输入口令" }, 401);
+  const invite = await findInviteById(codeId);
+  if (!invite || !invite.active) return c.json({ error: "该口令已被停用" }, 403);
+  if (!ttsPerIp.hit(ip).ok || !ttsPerCode.hit(String(codeId)).ok) {
+    return c.json({ error: "播报太频繁，请稍后再试" }, 429);
+  }
+  const t0 = Date.now();
+  try {
+    const r = await synthesize(parsed.data.text, AbortSignal.timeout(90_000));
+    console.log(`[tts] code=${codeId} chars=${r.chars} bytes=${r.audio.length} cached=${r.cached} ${Date.now() - t0}ms`);
+    return new Response(new Uint8Array(r.audio), {
+      status: 200,
+      headers: {
+        "Content-Type": "audio/mpeg",
+        "Content-Length": String(r.audio.length),
+        "Cache-Control": "private, max-age=86400",
+        "X-TTS-Cached": r.cached ? "1" : "0",
+      },
+    });
+  } catch (e) {
+    if (e instanceof TtsConfigError) return c.json({ error: "站点尚未配置语音服务" }, 503);
+    if (e instanceof TtsUpstreamError) {
+      console.warn("[tts] upstream", e.message);
+      return c.json({ error: `语音服务暂时不可用：${e.message}` }, 502);
+    }
+    console.error("[tts]", e);
+    return c.json({ error: "语音合成出错" }, 500);
+  }
 });
 
 app.get("/api/health", (c) => c.json({ ok: true, chunks: getIndex().chunks.length }));

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
-import { ArrowLeft, Loader2, Send, KeyRound, RotateCcw } from "lucide-react";
+import { ArrowLeft, Loader2, Send, KeyRound, RotateCcw, Volume2, Square } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { trpc } from "@/providers/trpc";
@@ -62,6 +62,13 @@ async function readSSE(resp: Response, onEvent: (e: StreamEvent) => void) {
 
 export default function Ask() {
   const [token, setToken] = useState<string>(() => localStorage.getItem(TOKEN_KEY) ?? "");
+  const [ttsOn, setTtsOn] = useState(false);
+  useEffect(() => {
+    fetch("/api/config")
+      .then((r) => r.json())
+      .then((j: { tts?: boolean }) => setTtsOn(Boolean(j.tts)))
+      .catch(() => {});
+  }, []);
   const [code, setCode] = useState("");
   const [quota, setQuota] = useState<{ used: number; limit: number } | null>(null);
   const [msgs, setMsgs] = useState<Msg[]>(loadMsgs);
@@ -218,7 +225,7 @@ export default function Ask() {
           </div>
         )}
         {msgs.map((m, i) => (
-          <Bubble key={i} msg={m} />
+          <Bubble key={i} msg={m} token={token} tts={ttsOn} />
         ))}
         {pending && (
           <div className="rounded-2xl rounded-tl-sm border border-[#2b2320]/10 bg-white px-4 py-3 text-sm leading-6 shadow-sm">
@@ -267,7 +274,7 @@ export default function Ask() {
   );
 }
 
-function Bubble({ msg }: { msg: Msg }) {
+function Bubble({ msg, token, tts }: { msg: Msg; token: string; tts: boolean }) {
   const [showSources, setShowSources] = useState(false);
   if (msg.role === "user") {
     return (
@@ -287,6 +294,7 @@ function Bubble({ msg }: { msg: Msg }) {
     <div className="rounded-2xl rounded-tl-sm border border-[#2b2320]/10 bg-white px-4 py-3 text-sm leading-6 shadow-sm">
       <Markdown text={msg.text} />
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-[#2b2320]/10 pt-2 text-[10px] text-[#2b2320]/45">
+        {tts && <SpeakButton text={msg.text} token={token} />}
         <span>AI 生成</span>
         {msg.sources && msg.sources.length > 0 && (
           <button onClick={() => setShowSources((v) => !v)} className="underline decoration-dotted">
@@ -302,6 +310,107 @@ function Bubble({ msg }: { msg: Msg }) {
         </ul>
       )}
     </div>
+  );
+}
+
+// 一小段无声 wav：在用户点击的同一事件里先 play 一下，iOS Safari 才允许之后异步换 src 再播放
+const SILENT_WAV =
+  "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
+
+function SpeakButton({ text, token }: { text: string; token: string }) {
+  const [state, setState] = useState<"idle" | "loading" | "playing" | "error">("idle");
+  const [err, setErr] = useState("");
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const urlRef = useRef<string | null>(null);
+
+  useEffect(
+    () => () => {
+      audioRef.current?.pause();
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+    },
+    [],
+  );
+
+  const stop = () => {
+    audioRef.current?.pause();
+    setState("idle");
+  };
+
+  const play = async () => {
+    if (state === "playing") return stop();
+    let a = audioRef.current;
+    if (!a) {
+      a = new Audio();
+      a.preload = "auto";
+      a.onended = () => setState("idle");
+      a.onerror = () => {
+        setErr("播放失败");
+        setState("error");
+      };
+      audioRef.current = a;
+    }
+    // 已经取过音频：直接重放
+    if (urlRef.current) {
+      a.currentTime = 0;
+      void a.play();
+      setState("playing");
+      return;
+    }
+    a.src = SILENT_WAV;
+    void a.play().catch(() => {});
+    setState("loading");
+    setErr("");
+    try {
+      const resp = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, text }),
+      });
+      if (!resp.ok) {
+        const j = (await resp.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error ?? `请求失败（${resp.status}）`);
+      }
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      urlRef.current = url;
+      a.src = url;
+      await a.play();
+      setState("playing");
+    } catch (e) {
+      setErr((e as Error).message);
+      setState("error");
+    }
+  };
+
+  return (
+    <button
+      onClick={() => void play()}
+      disabled={state === "loading"}
+      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition active:scale-95 ${
+        state === "playing"
+          ? "border-[#b03a2e] bg-[#b03a2e] text-white"
+          : "border-[#b03a2e]/40 bg-[#b03a2e]/5 text-[#b03a2e]"
+      } disabled:opacity-60`}
+      title={state === "error" ? err : undefined}
+    >
+      {state === "loading" ? (
+        <>
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> 合成中…
+        </>
+      ) : state === "playing" ? (
+        <>
+          <Square className="h-3 w-3" /> 停止
+        </>
+      ) : state === "error" ? (
+        <>
+          <Volume2 className="h-3.5 w-3.5" /> {err || "重试"}
+        </>
+      ) : (
+        <>
+          <Volume2 className="h-3.5 w-3.5" /> 听语音
+        </>
+      )}
+    </button>
   );
 }
 
